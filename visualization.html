@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neural Network Visualizer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a1a;
+    color: #e0e0ff;
+    font-family: 'Segoe UI', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  h1 {
+    margin-top: 24px;
+    font-size: 1.6rem;
+    letter-spacing: 0.15em;
+    color: #a78bfa;
+    text-transform: uppercase;
+  }
+  p.subtitle {
+    font-size: 0.8rem;
+    color: #555580;
+    margin-top: 4px;
+    letter-spacing: 0.1em;
+  }
+  canvas {
+    margin-top: 20px;
+    border-radius: 12px;
+    background: #0d0d22;
+    box-shadow: 0 0 60px rgba(124, 58, 237, 0.25);
+  }
+  .controls {
+    display: flex;
+    gap: 12px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    padding: 8px 22px;
+    border: 1px solid #4c1d95;
+    border-radius: 8px;
+    background: rgba(76, 29, 149, 0.3);
+    color: #c4b5fd;
+    cursor: pointer;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+  }
+  button:hover { background: rgba(124, 58, 237, 0.5); border-color: #7c3aed; color: #fff; }
+  button.active { background: rgba(124, 58, 237, 0.7); border-color: #a78bfa; color: #fff; }
+  .stats {
+    display: flex;
+    gap: 32px;
+    margin-top: 16px;
+    font-size: 0.78rem;
+    color: #6666aa;
+  }
+  .stats span { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .stats strong { color: #a78bfa; font-size: 1.1rem; }
+  footer { margin: 24px 0 12px; font-size: 0.72rem; color: #333355; letter-spacing: 0.08em; }
+</style>
+</head>
+<body>
+
+<h1>Neural Network Visualizer</h1>
+<p class="subtitle">Deep Learning AI · Claude Code</p>
+
+<canvas id="canvas" width="860" height="480"></canvas>
+
+<div class="controls">
+  <button id="btnForward" class="active">Forward Pass</button>
+  <button id="btnReset">Reset</button>
+  <button id="btnTogglePulse">Pulse: ON</button>
+  <button id="btnAddLayer">Add Layer</button>
+  <button id="btnRemoveLayer">Remove Layer</button>
+</div>
+
+<div class="stats">
+  <span><strong id="statLayers">0</strong>Layers</span>
+  <span><strong id="statNeurons">0</strong>Neurons</span>
+  <span><strong id="statWeights">0</strong>Weights</span>
+  <span><strong id="statEpoch">0</strong>Epoch</span>
+</div>
+
+<footer>CLICK CANVAS TO FIRE A NEURON &nbsp;·&nbsp; USE BUTTONS TO EXPLORE</footer>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// --- Network Architecture ---
+let layerSizes = [4, 6, 6, 4, 2];
+let epoch = 0;
+let pulseEnabled = true;
+let animId;
+
+// --- State ---
+let neurons = [];    // [{x, y, layer, idx, activation, fire}]
+let weights = [];    // [{from, to, w}]
+let signals = [];    // [{x, y, tx, ty, progress, color, strength}]
+let fireQueue = [];  // indices of neurons to fire next frame
+let time = 0;
+
+function buildNetwork() {
+  neurons = [];
+  weights = [];
+  signals = [];
+  fireQueue = [];
+
+  const padX = 80, padY = 60;
+  const layerCount = layerSizes.length;
+  const usableW = W - padX * 2;
+  const usableH = H - padY * 2;
+
+  // Place neurons
+  for (let l = 0; l < layerCount; l++) {
+    const n = layerSizes[l];
+    const x = padX + (l / (layerCount - 1)) * usableW;
+    for (let i = 0; i < n; i++) {
+      const y = padY + ((i + 0.5) / n) * usableH;
+      neurons.push({ x, y, layer: l, idx: i, activation: Math.random() * 0.3, fire: 0, bias: Math.random() * 0.4 - 0.2 });
+    }
+  }
+
+  // Build weight connections (all adjacent layers)
+  for (let l = 0; l < layerCount - 1; l++) {
+    const fromNeurons = neurons.filter(n => n.layer === l);
+    const toNeurons   = neurons.filter(n => n.layer === l + 1);
+    for (const f of fromNeurons) {
+      for (const t of toNeurons) {
+        weights.push({ from: neurons.indexOf(f), to: neurons.indexOf(t), w: Math.random() * 2 - 1 });
+      }
+    }
+  }
+
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('statLayers').textContent  = layerSizes.length;
+  document.getElementById('statNeurons').textContent = neurons.length;
+  document.getElementById('statWeights').textContent = weights.length;
+  document.getElementById('statEpoch').textContent   = epoch;
+}
+
+// --- Forward Pass ---
+let fwdTimeout = null;
+function forwardPass() {
+  if (fwdTimeout) clearTimeout(fwdTimeout);
+  epoch++;
+  updateStats();
+
+  // Activate layer by layer with delays
+  const layerCount = layerSizes.length;
+  for (let l = 0; l < layerCount; l++) {
+    (function(layer) {
+      fwdTimeout = setTimeout(() => {
+        const ns = neurons.filter(n => n.layer === layer);
+        for (const n of ns) {
+          n.activation = Math.random() * 0.7 + 0.3;
+          n.fire = 1.0;
+          if (layer < layerCount - 1) {
+            spawnSignalsFrom(neurons.indexOf(n));
+          }
+        }
+      }, layer * 420);
+    })(l);
+  }
+}
+
+function spawnSignalsFrom(neuronIdx) {
+  const from = neurons[neuronIdx];
+  const outWeights = weights.filter(w => w.from === neuronIdx);
+  for (const wt of outWeights) {
+    const to = neurons[wt.to];
+    const strength = Math.abs(wt.w);
+    const positive = wt.w > 0;
+    signals.push({
+      sx: from.x, sy: from.y,
+      tx: to.x,   ty: to.y,
+      progress: 0,
+      speed: 0.012 + Math.random() * 0.008,
+      strength,
+      color: positive ? `rgba(129,140,248,` : `rgba(244,114,182,`,
+      wt: wt.w
+    });
+  }
+}
+
+// --- Draw ---
+function drawWeights() {
+  for (const wt of weights) {
+    const f = neurons[wt.from], t = neurons[wt.to];
+    const alpha = Math.abs(wt.w) * 0.12 + 0.03;
+    const hue = wt.w > 0 ? '210,160,255' : '255,120,180';
+    ctx.strokeStyle = `rgba(${hue},${alpha})`;
+    ctx.lineWidth = Math.abs(wt.w) * 1.2;
+    ctx.beginPath();
+    ctx.moveTo(f.x, f.y);
+    ctx.lineTo(t.x, t.y);
+    ctx.stroke();
+  }
+}
+
+function drawNeurons() {
+  for (const n of neurons) {
+    const r = 12 + n.activation * 6;
+    const glow = n.fire > 0.1;
+
+    // Outer glow
+    if (glow) {
+      const grad = ctx.createRadialGradient(n.x, n.y, r, n.x, n.y, r + 18 * n.fire);
+      grad.addColorStop(0, `rgba(167,139,250,${n.fire * 0.6})`);
+      grad.addColorStop(1, 'rgba(167,139,250,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r + 18 * n.fire, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Body gradient
+    const bodyGrad = ctx.createRadialGradient(n.x - 3, n.y - 3, 1, n.x, n.y, r);
+    bodyGrad.addColorStop(0, glow ? '#e0d7ff' : '#4a4060');
+    bodyGrad.addColorStop(1, glow ? '#7c3aed' : '#1e1830');
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Ring
+    ctx.strokeStyle = glow ? `rgba(196,181,253,${n.fire})` : 'rgba(80,60,120,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Activation bar (tiny)
+    const barW = r * 1.4;
+    const barH = 3;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(n.x - barW/2, n.y + r + 4, barW, barH);
+    ctx.fillStyle = `rgba(167,139,250,${0.5 + n.activation * 0.5})`;
+    ctx.fillRect(n.x - barW/2, n.y + r + 4, barW * n.activation, barH);
+
+    // Decay
+    n.fire = Math.max(0, n.fire - 0.018);
+    n.activation = Math.max(0.05, n.activation - 0.003);
+  }
+}
+
+function drawSignals() {
+  for (let i = signals.length - 1; i >= 0; i--) {
+    const s = signals[i];
+    s.progress += s.speed;
+
+    const x = s.sx + (s.tx - s.sx) * s.progress;
+    const y = s.sy + (s.ty - s.sy) * s.progress;
+    const alpha = Math.sin(s.progress * Math.PI);
+
+    // Trail
+    ctx.strokeStyle = s.color + alpha * 0.4 + ')';
+    ctx.lineWidth = s.strength * 2 + 1;
+    const trailFrac = Math.max(0, s.progress - 0.12);
+    ctx.beginPath();
+    ctx.moveTo(s.sx + (s.tx - s.sx) * trailFrac, s.sy + (s.ty - s.sy) * trailFrac);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+
+    // Head dot
+    ctx.fillStyle = s.color + alpha + ')';
+    ctx.beginPath();
+    ctx.arc(x, y, 3 + s.strength * 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (s.progress >= 1) {
+      // Activate target neuron
+      const to = neurons[weights.find(w => w.to !== undefined && neurons[w.to].x === s.tx && neurons[w.to].y === s.ty)?.to];
+      if (to) { to.fire = Math.min(1, to.fire + 0.3); to.activation = Math.min(1, to.activation + 0.2); }
+      signals.splice(i, 1);
+    }
+  }
+}
+
+function drawBackground() {
+  // Subtle grid
+  ctx.strokeStyle = 'rgba(60,40,100,0.15)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+}
+
+function drawPulse() {
+  if (!pulseEnabled) return;
+  // Ambient random flicker
+  if (Math.random() < 0.04) {
+    const n = neurons[Math.floor(Math.random() * neurons.length)];
+    if (n) { n.fire = Math.min(1, n.fire + 0.15); spawnSignalsFrom(neurons.indexOf(n)); }
+  }
+}
+
+function drawLayerLabels() {
+  const labels = ['Input', ...Array(layerSizes.length - 2).fill('').map((_, i) => `Hidden ${i+1}`), 'Output'];
+  const layerCount = layerSizes.length;
+  const padX = 80;
+  const usableW = W - padX * 2;
+
+  ctx.font = '11px monospace';
+  ctx.fillStyle = 'rgba(130,100,200,0.6)';
+  ctx.textAlign = 'center';
+  for (let l = 0; l < layerCount; l++) {
+    const x = padX + (l / (layerCount - 1)) * usableW;
+    ctx.fillText(labels[l] || `Hidden ${l}`, x, H - 10);
+  }
+}
+
+function loop() {
+  time++;
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+  drawWeights();
+  drawSignals();
+  drawNeurons();
+  drawLayerLabels();
+  animId = requestAnimationFrame(loop);
+}
+
+// --- Controls ---
+document.getElementById('btnForward').addEventListener('click', () => {
+  document.getElementById('btnForward').classList.add('active');
+  forwardPass();
+  setTimeout(() => document.getElementById('btnForward').classList.remove('active'), 500);
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  signals = [];
+  for (const n of neurons) { n.activation = Math.random() * 0.2; n.fire = 0; }
+  epoch = 0; updateStats();
+});
+
+document.getElementById('btnTogglePulse').addEventListener('click', (e) => {
+  pulseEnabled = !pulseEnabled;
+  e.target.textContent = `Pulse: ${pulseEnabled ? 'ON' : 'OFF'}`;
+  e.target.classList.toggle('active', pulseEnabled);
+});
+
+document.getElementById('btnAddLayer').addEventListener('click', () => {
+  if (layerSizes.length < 8) {
+    layerSizes.splice(layerSizes.length - 1, 0, Math.floor(Math.random() * 4) + 3);
+    buildNetwork();
+  }
+});
+
+document.getElementById('btnRemoveLayer').addEventListener('click', () => {
+  if (layerSizes.length > 3) {
+    layerSizes.splice(layerSizes.length - 2, 1);
+    buildNetwork();
+  }
+});
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top)  * (H / rect.height);
+
+  let closest = null, minDist = 30;
+  for (const n of neurons) {
+    const d = Math.hypot(n.x - mx, n.y - my);
+    if (d < minDist) { minDist = d; closest = n; }
+  }
+  if (closest) {
+    closest.fire = 1;
+    closest.activation = 1;
+    spawnSignalsFrom(neurons.indexOf(closest));
+  }
+});
+
+// Auto-forward every 5 seconds for demo feel
+setInterval(() => { if (pulseEnabled) forwardPass(); }, 5000);
+
+buildNetwork();
+loop();
+forwardPass();
+</script>
+</body>
+</html>
